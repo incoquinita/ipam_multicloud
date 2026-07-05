@@ -31,7 +31,7 @@ oci>=2.130.0
 google-cloud-compute>=1.19.0
 
 # Security
-cryptography>=43.0.0
+cryptography>=48.0.1
 python-jose[cryptography]>=3.3.0
 bcrypt>=4.0.0
 
