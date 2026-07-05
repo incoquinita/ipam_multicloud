@@ -1,0 +1,143 @@
+# ────────────────────────────────────────────────────────────────────
+# Multi-Cloud IPAM Security Scanner — Docker Compose
+# ────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── FastAPI Application ─────────────────────────────────────────
+  app:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ipam-app
+    ports:
+      - "8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file: .env
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    networks:
+      - ipam_network
+
+  # ── Celery Worker ───────────────────────────────────────────────
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.celery
+    container_name: ipam-celery-worker
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
+    env_file: .env
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ipam_network
+
+  # ── Celery Beat Scheduler (optional) ────────────────────────────
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ipam-celery-beat
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    env_file: .env
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - scheduler
+    networks:
+      - ipam_network
+
+  # ── PostgreSQL 16 ───────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: ipam-db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ipam} -d ${POSTGRES_DB:-ipam_scanner}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - ipam_network
+
+  # ── Redis 7 ─────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ipam-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - ipam_network
+
+  # ── Frontend (React — nginx-served production build) ───────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ipam-frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # TLS certificates for nginx termination (read-only mount).
+      - ./nginx/certs:/etc/nginx/certs:ro
+    profiles:
+      - frontend
+    depends_on:
+      - app
+    networks:
+      - ipam_network
+
+
+# ── Volumes ──────────────────────────────────────────────────────
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+
+
+# ── Networks ─────────────────────────────────────────────────────
+networks:
+  ipam_network:
+    driver: bridge
