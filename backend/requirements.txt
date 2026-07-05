@@ -9,7 +9,7 @@ alembic>=1.13.0
 
 # Validation
 pydantic>=2.9.0
-pydantic-settings>=2.6.0
+pydantic-settings>=2.14.2
 email-validator>=2.0.0
 
 # Task Queue
